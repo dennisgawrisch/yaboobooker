@@ -1,0 +1,86 @@
+#!/usr/bin/php
+<?php
+/*
+ * Yaboobooker
+ * Copyright © 2009–2010 Denys Popov <besisland@besisland.name>
+ *
+ * This program is distributed under the terms of the GNU General Public License
+ * as published by the Free Software Foundation, version 3.
+ *
+ * See other credits and licensing information in CREDITS,
+ * and the copy of the GNU General Public License in LICENSE.
+*/
+print <<<WELCOME
+Yaboobooker Validator
+Copyright © 2009–2010 Denys Popov <besisland@besisland.name>
+
+WELCOME;
+
+error_reporting(0);
+
+set_include_path(dirname(__FILE__) . DIRECTORY_SEPARATOR . "classes" . PATH_SEPARATOR . get_include_path());
+
+function __autoload($class_name) {
+    $filename = str_replace("_", DIRECTORY_SEPARATOR, $class_name) . ".php";
+    require_once $filename;
+}
+
+define("SCHEMAS_DIR", dirname(__FILE__) . DIRECTORY_SEPARATOR . "schemas");
+
+if (empty($_SERVER["argv"][1])) {
+    print "Usage: {$_SERVER['argv'][0]} filename.fb2[.zip]" . PHP_EOL;
+} else {
+    $filename = $_SERVER["argv"][1];
+
+    print "Processing '$filename'..." . PHP_EOL;
+
+    if (!file_exists($filename)) {
+        print "File does not exist." . PHP_EOL;
+        die(1);
+    }
+    if (!is_readable($filename)) {
+        print "File is not readable." . PHP_EOL;
+        die(2);
+    }
+
+    $dot_position = strrpos($filename, ".");
+    $filename_extension = (FALSE !== $dot_position) ? substr($filename, $dot_position) : "";
+
+    try {
+        switch ($filename_extension) {
+            case ".zip":
+                print "Processing as ZIP compressed file." . PHP_EOL;
+                $reader = new FictionBook_Reader_Zip($filename);
+                break;
+            case ".fb2":
+            default:
+                print "Processing as uncompressed XML code." . PHP_EOL;
+                $reader = new FictionBook_Reader_Xml_File($filename);
+        }
+
+        $reader->load();
+    } catch (FictionBook_Reader_Exception $exception) {
+        print "File cannot be loaded. It is probably mistaken." . PHP_EOL;
+        print $exception->getMessage() . PHP_EOL;
+        die(3);
+    }
+
+    $dom = $reader->getDom();
+    if (empty($dom)) {
+        print "File does not contain valid XML code." . PHP_EOL;
+        die(4);
+    }
+
+    $validator = new FictionBook_Validator($dom);
+
+    if ($validator->isValid()) {
+        print "The book is valid." . PHP_EOL;
+        exit(0);
+    } else {
+        print "The book is NOT valid." . PHP_EOL;
+        foreach ($validator->getValidationErrors() as $error) {
+            print "Line {$error['line']}: {$error['message']}" . PHP_EOL;
+        }
+        die(99);
+    }
+}

@@ -1,0 +1,157 @@
+#!/usr/bin/php
+<?php
+/*
+ * Yaboobooker
+ * Copyright © 2009–2010 Denys Popov <besisland@besisland.name>
+ *
+ * This program is distributed under the terms of the GNU General Public License
+ * as published by the Free Software Foundation, version 3.
+ *
+ * See other credits and licensing information in CREDITS,
+ * and the copy of the GNU General Public License in LICENSE.
+*/
+print <<<WELCOME
+Yaboobooker Renamer
+Copyright © 2009–2010 Denys Popov <besisland@besisland.name>
+
+WELCOME;
+
+error_reporting(0);
+
+set_include_path(dirname(__FILE__) . DIRECTORY_SEPARATOR . "classes" . PATH_SEPARATOR . get_include_path());
+
+function __autoload($class_name) {
+    $filename = str_replace("_", DIRECTORY_SEPARATOR, $class_name) . ".php";
+    require_once $filename;
+}
+
+define("SCHEMAS_DIR", dirname(__FILE__) . DIRECTORY_SEPARATOR . "schemas");
+
+if ($_SERVER["argc"] < 3) {
+    print "Usage: {$_SERVER['argv'][0]} filename.fb2[.zip] 'template'" . PHP_EOL;
+    print "Where template should include substitutions like \$author, \$tr_author, \$title, \$sequence" . PHP_EOL;
+    print "E.g.: {$_SERVER['argv'][0]} 12345.fb2.zip '~/Books/\$author/\$title'" . PHP_EOL;
+} else {
+    $filename = $_SERVER["argv"][1];
+
+    print "Processing '$filename'..." . PHP_EOL;
+
+    if (!file_exists($filename)) {
+        print "File does not exist." . PHP_EOL;
+        die(1);
+    }
+    if (!is_readable($filename)) {
+        print "File is not readable." . PHP_EOL;
+        die(2);
+    }
+
+    $dot_position = strrpos($filename, ".");
+    $filename_extension = (FALSE !== $dot_position) ? substr($filename, $dot_position) : "";
+
+    try {
+        switch ($filename_extension) {
+            case ".zip":
+                print "Processing as ZIP compressed file." . PHP_EOL;
+                $reader = new FictionBook_Reader_Zip($filename);
+                break;
+            case ".fb2":
+            default:
+                print "Processing as uncompressed XML code." . PHP_EOL;
+                $reader = new FictionBook_Reader_Xml_File($filename);
+        }
+
+        $reader->load();
+    } catch (FictionBook_Reader_Exception $exception) {
+        print "File cannot be loaded. It is probably mistaken." . PHP_EOL;
+        print $exception->getMessage() . PHP_EOL;
+        die(3);
+    }
+
+    $dom = $reader->getDom();
+    if (empty($dom)) {
+        // OK, bad DOM… We are not validating here, so let’s try and get something from the raw source code
+        $code = $reader->getCode();
+        if (preg_match('/<?xml [^>]*encoding=["\']?([^"\']+)["\']?/', $code, $matches)) {
+            $code = iconv($matches[1], "UTF-8", $code);
+        }
+
+        $start = strpos($code, "<title-info>");
+        $finish = strpos($code, "</title-info>");
+        if (!is_bool($start) && !is_bool($finish)) {
+            $title_info = simplexml_load_string(substr($code, $start, $finish - $start + 13));
+        } else {
+            $title_info = new SimpleXMLElement("<dummy />");
+        }
+
+        $start = strpos($code, "<src-title-info>");
+        $finish = strpos($code, "</src-title-info>");
+        if (!is_bool($start) && !is_bool($finish)) {
+            $src_title_info = simplexml_load_string(substr($code, $start, $finish - $start + 16));
+        } else {
+            $src_title_info = new SimpleXMLElement("<dummy />");
+        }
+    } else {
+        $simple_xml = simplexml_import_dom($dom);
+        $title_info = $simple_xml->description->{"title-info"};
+        $src_title_info = $simple_xml->description->{"src-title-info"};
+    }
+
+    foreach (array("tr_author" => $title_info->author, "src_author" => $src_title_info->author) as $var_name => $data) {
+        if ($data) {
+            $nickname = trim($data->nickname);
+            if (empty($nickname)) {
+                $$var_name = trim($data->{"first-name"} . " " . $data->{"last-name"});
+            } else {
+                $$var_name = $nickname;
+            }
+        } else {
+            $$var_name = NULL;
+        }
+    }
+
+    $author = !empty($src_author) ? $src_author : $tr_author;
+
+    $title = (string)$title_info->{"book-title"};
+
+    if ($title_info->sequence) {
+        $sequence = (string)$title_info->sequence["name"];
+    } else {
+        $sequence = NULL;
+    }
+
+    if (empty($author) || empty($tr_author)) {
+        print "Cannot get author name." . PHP_EOL;
+        die(99);
+    }
+    if (empty($title)) {
+        print "Cannot get title." . PHP_EOL;
+        die(99);
+    }
+
+    $subst = array(
+        '$author'       => $author,
+        '$tr_author'    => $tr_author,
+        '$title'        => $title,
+        '$sequence'     => $sequence,
+    );
+
+    if (".zip" == $filename_extension) {
+        $filename_extension = ".fb2.zip";
+    }
+    $new_filename = strtr($_SERVER["argv"][2], $subst) . $filename_extension;
+
+    $directory = dirname($new_filename);
+    if (!file_exists($directory)) {
+        if (!mkdir($directory, 0755, TRUE)) {
+            print "Cannot create directory '$directory'." . PHP_EOL;
+            die(98);
+        }
+    }
+
+    print "Renaming file '$filename' to '$new_filename'." . PHP_EOL;
+
+    if (!rename($filename, $new_filename)) {
+        print "Cannot rename file." . PHP_EOL;
+        die(98);
+    }
+}
